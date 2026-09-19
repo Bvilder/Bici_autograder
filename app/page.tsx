@@ -97,15 +97,14 @@ const STEPS = ['解析报告结构', '切分证据块', '对齐评分细则', '�
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
+type Message = { id: string; role: 'user' | 'assistant'; text?: string; points?: Point[] }
+
 /* ------------------------------------------------------------------ */
 /* page                                                               */
 /* ------------------------------------------------------------------ */
 
 export default function Page() {
-  const [messages, setMessages] = useState<{ id: string; role: 'user' | 'assistant'; text?: string; points?: Point[] }[]>([
-    { id: 'm1', role: 'user', text: '帮我评改这份实验报告，用《操作系统实验评分细则》' },
-    { id: 'm2', role: 'assistant', points: POINTS },
-  ])
+  const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [pending, setPending] = useState(false)
   const [step, setStep] = useState(0)
@@ -183,7 +182,9 @@ export default function Page() {
         .ag-in{animation:ag-in .38s cubic-bezier(.22,1,.36,1) both}
         @keyframes ag-dot{0%,80%,100%{opacity:.25;transform:translateY(0)}40%{opacity:1;transform:translateY(-3px)}}
         .ag-dot{animation:ag-dot 1.2s infinite}
-        @media (prefers-reduced-motion:reduce){.ag-anchor-on,.ag-in{animation:none}}
+        @keyframes ag-spin{to{transform:rotate(360deg)}}
+        .ag-spin{animation:ag-spin .8s linear infinite}
+        @media (prefers-reduced-motion:reduce){.ag-anchor-on,.ag-in,.ag-spin{animation:none}}
       `}</style>
 
       <div className="mx-auto flex h-full max-w-[1800px] flex-col p-3 sm:p-4">
@@ -204,51 +205,80 @@ export default function Page() {
                 <Target className="h-3 w-3" />
                 证据可溯源
               </span>
-              <button className="grid h-7 w-7 place-items-center rounded-lg text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700">
+              <button
+                onClick={() => {
+                  setMessages([])
+                  setActiveAnchor(null)
+                  setActivePoint(null)
+                }}
+                className="grid h-7 w-7 place-items-center rounded-lg text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700"
+                title="清空对话"
+              >
                 <RotateCcw className="h-3.5 w-3.5" />
               </button>
             </header>
 
-            <div ref={chatRef} className="ag-scroll min-h-0 flex-1 space-y-6 overflow-y-auto px-4 py-5">
+            <div ref={chatRef} className="ag-scroll min-h-0 flex-1 overflow-y-auto">
+              {messages.length === 0 && !pending ? (
+                <div className="flex h-full flex-col items-center justify-center px-6 py-10 text-center">
+                  <div className="grid h-14 w-14 place-items-center rounded-2xl bg-zinc-900">
+                    <Sparkles className="h-7 w-7 text-white" />
+                  </div>
+                  <h2 className="mt-5 text-[15px] font-medium tracking-tight text-zinc-900">你好，我是彼此_Autograder</h2>
+                  <p className="mt-1.5 max-w-[300px] text-[12px] leading-relaxed text-zinc-500">
+                    上传实验报告后，把评分细则发给我，我会逐评分点核查，并给出可溯源到原文的证据。
+                  </p>
+                  <div className="mt-6 grid w-full max-w-[320px] gap-2">
+                    {CHIPS.slice(0, 3).map((c) => (
+                      <button
+                        key={c}
+                        onClick={() => send(c)}
+                        className="group flex items-center gap-2.5 rounded-xl border border-zinc-200 bg-white px-3.5 py-2.5 text-left text-[12px] text-zinc-600 transition hover:border-zinc-300 hover:bg-zinc-50 hover:text-zinc-900"
+                      >
+                        <span className="min-w-0 flex-1 truncate">{c}</span>
+                        <ChevronRight className="h-3.5 w-3.5 shrink-0 text-zinc-300 transition group-hover:text-zinc-500" />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-6 px-4 py-5">
+                  {messages.map((m) =>
+                    m.role === 'user' ? (
+                      <div key={m.id} className="ag-in flex justify-end">
+                        <div className="max-w-[88%] rounded-2xl rounded-br-md bg-zinc-900 px-3.5 py-2.5 text-[12.5px] leading-relaxed text-white shadow-[0_1px_2px_rgba(9,9,11,.08)]">
+                          {m.text}
+                        </div>
+                      </div>
+                    ) : (
+                      <AssistantMessage
+                        key={m.id}
+                        points={m.points ?? []}
+                        activeAnchor={activeAnchor}
+                        activePoint={activePoint}
+                        onLocate={locate}
+                      />
+                    )
+                  )}
 
-              {messages.map((m) =>
-                m.role === 'user' ? (
-                  <div key={m.id} className="ag-in flex justify-end">
-                    <div className="max-w-[88%] rounded-2xl rounded-br-md bg-zinc-900 px-3.5 py-2.5 text-[12.5px] leading-relaxed text-white shadow-[0_1px_2px_rgba(9,9,11,.08)]">
-                      {m.text}
+                  {pending && (
+                    <div className="ag-in flex gap-2.5">
+                      <div className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-zinc-900">
+                        <Sparkles className="h-3.5 w-3.5 text-white" />
+                      </div>
+                      <div className="flex-1 rounded-xl border border-zinc-200/80 bg-white px-3.5 py-3">
+                        <div className="flex items-center gap-2">
+                          <span className="ag-spin inline-block h-3.5 w-3.5 rounded-full border-2 border-zinc-200 border-t-zinc-500" />
+                          <span className="text-[12px] text-zinc-500">{STEPS[step]}…</span>
+                        </div>
+                        <div className="mt-2.5 space-y-1.5">
+                          {[80, 62, 44].map((w, i) => (
+                            <div key={i} className="h-2 animate-pulse rounded-full bg-zinc-100" style={{ width: `${w}%`, animationDelay: `${i * 0.12}s` }} />
+                          ))}
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                ) : (
-                  <AssistantMessage
-                    key={m.id}
-                    points={m.points ?? []}
-                    activeAnchor={activeAnchor}
-                    activePoint={activePoint}
-                    onLocate={locate}
-                  />
-                )
-              )}
-
-              {pending && (
-                <div className="ag-in flex gap-2.5">
-                  <div className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-zinc-900">
-                    <Sparkles className="h-3.5 w-3.5 text-white" />
-                  </div>
-                  <div className="flex-1 rounded-xl border border-zinc-200/80 bg-white px-3.5 py-3">
-                    <div className="flex items-center gap-2">
-                      <span className="flex gap-1">
-                        {[0, 1, 2].map((i) => (
-                          <span key={i} className="ag-dot h-1.5 w-1.5 rounded-full bg-zinc-400" style={{ animationDelay: `${i * 0.15}s` }} />
-                        ))}
-                      </span>
-                      <span className="text-[12px] text-zinc-500">{STEPS[step]}…</span>
-                    </div>
-                    <div className="mt-2.5 space-y-1.5">
-                      {[80, 62, 44].map((w, i) => (
-                        <div key={i} className="h-2 animate-pulse rounded-full bg-zinc-100" style={{ width: `${w}%`, animationDelay: `${i * 0.12}s` }} />
-                      ))}
-                    </div>
-                  </div>
+                  )}
                 </div>
               )}
             </div>
