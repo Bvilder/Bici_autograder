@@ -34,4 +34,4 @@ AutoGrader 是一款面向高校计算机专业的**实验报告智能评阅平�
 请在终端执行：
 ```bash
 npm install
-npm run dev
+npm run devgit add .

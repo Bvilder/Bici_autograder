@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   Sparkles, Send, FileText, Quote, Lightbulb, Crosshair, Highlighter,
   Check, X, Minus, Download, Copy, RotateCcw, Paperclip,
-  Info, Target, ListChecks, ChevronRight, NotebookPen, ScanSearch, BookOpen, Wrench, Users,
+  Info, Target, ListChecks, ChevronRight, NotebookPen, ScanSearch, BookOpen, Wrench, Users, SlidersHorizontal,
 } from 'lucide-react'
 import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription,
@@ -13,7 +13,11 @@ import {
 import ReportViewer from '@/components/ReportViewer'
 import UploadDropzone from '@/components/UploadDropzone'
 import Workbench from '@/components/Workbench'
-import type { Chunk, GradedPoint, GradeResult, Student, Verdict, WorkbenchData } from '@/lib/types'
+import RubricEditor from '@/components/RubricEditor'
+import Login from '@/components/Login'
+import Profile from '@/components/Profile'
+import type { Chunk, GradedPoint, GradeResult, SimpleRubricPoint, Student, Verdict, WorkbenchData } from '@/lib/types'
+import { DEFAULT_RUBRIC } from '@/lib/grading-utils'
 
 /* ------------------------------------------------------------------ */
 /* 静态 mock 内容（知识点 / 评语 / 汇总表 / 修改建议）                  */
@@ -309,8 +313,23 @@ function Radar({ dims, size = 150 }: { dims: { label: string; got: number; full:
 /* 主页面                                                              */
 /* ------------------------------------------------------------------ */
 
+const RUBRIC_KEY = 'autograder_rubric'
+
+function loadRubric(): SimpleRubricPoint[] {
+  if (typeof window === 'undefined') return DEFAULT_RUBRIC
+  try {
+    const raw = localStorage.getItem(RUBRIC_KEY)
+    if (!raw) return DEFAULT_RUBRIC
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) && parsed.length ? parsed : DEFAULT_RUBRIC
+  } catch {
+    return DEFAULT_RUBRIC
+  }
+}
+
 export default function Page() {
-  const [view, setView] = useState<'grade' | 'class'>('grade')
+  const [view, setView] = useState<'grade' | 'class' | 'profile'>('grade')
+  const [user, setUser] = useState<{ name: string; signature: string } | null>(null)
   const [report, setReport] = useState<GradeResult | null>(null)
   const [reportText, setReportText] = useState('')
   const [reportName, setReportName] = useState('')
@@ -328,6 +347,11 @@ export default function Page() {
   const [sheetPoint, setSheetPoint] = useState<GradedPoint | null>(null)
   const [notebook, setNotebook] = useState<NotebookItem[]>([])
   const [notebookOpen, setNotebookOpen] = useState(false)
+  const [rubric, setRubric] = useState<SimpleRubricPoint[]>(loadRubric)
+  const [rubricOpen, setRubricOpen] = useState(false)
+  const [rubricCustomized, setRubricCustomized] = useState<boolean>(() => {
+    try { return typeof window !== 'undefined' && !!localStorage.getItem(RUBRIC_KEY) } catch { return false }
+  })
 
   const chatRef = useRef<HTMLDivElement>(null)
   const taRef = useRef<HTMLTextAreaElement>(null)
@@ -358,13 +382,21 @@ export default function Page() {
     try {
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(), 30000)
-      const res = await fetch('/api/grade', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reportText: text, fileName: name }), signal: controller.signal })
+      const payload = { reportText: text, fileName: name, ...(rubricCustomized ? { rubric } : {}) }
+      const res = await fetch('/api/grade', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal: controller.signal })
       clearTimeout(timer)
       if (!res.ok) return { ok: false, error: `评阅服务异常（HTTP ${res.status}），请稍后重试` }
       return await res.json()
     } catch {
       return { ok: false, error: '评阅请求失败，请确认后端服务已启动' }
     }
+  }
+
+  function saveRubric(r: SimpleRubricPoint[]) {
+    setRubric(r)
+    try { localStorage.setItem(RUBRIC_KEY, JSON.stringify(r)) } catch { /* ignore */ }
+    // 只有真正改过细则才切换成关键词匹配打分，否则继续用默认细则的内置评分
+    setRubricCustomized(JSON.stringify(r) !== JSON.stringify(DEFAULT_RUBRIC))
   }
 
   async function runGrade(text: string, name: string) {
@@ -586,6 +618,10 @@ export default function Page() {
 
   const resetChat = () => { setMessages([]); setActiveAnchor(null); setWeakAnchor(null); setToast(null); setReveal(null); setPhase('idle') }
 
+  if (!user) {
+    return <Login onLogin={(name) => setUser({ name, signature: '' })} />
+  }
+
   return (
     <div
       className="h-[100dvh] w-full overflow-hidden text-zinc-900 antialiased"
@@ -643,17 +679,30 @@ export default function Page() {
             </button>
           </div>
           <div className="ml-auto flex items-center gap-2">
+            <button onClick={() => setRubricOpen(true)} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 text-[11.5px] font-medium text-zinc-700 transition hover:border-zinc-300 hover:text-zinc-900">
+              <SlidersHorizontal className="h-3.5 w-3.5" />
+              评分细则
+            </button>
             {report && (
               <button onClick={exportReport} className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-zinc-900 px-3 text-[11.5px] font-medium text-white transition hover:bg-zinc-700">
                 <Download className="h-3.5 w-3.5" />
                 导出成绩单
               </button>
             )}
+            <button
+              onClick={() => setView('profile')}
+              className={`flex h-8 items-center gap-2 rounded-lg border px-2 py-1 transition ${view === 'profile' ? 'border-zinc-900 bg-zinc-900 text-white' : 'border-zinc-200 bg-white text-zinc-700 hover:border-zinc-300'}`}
+            >
+              <span className={`grid h-5 w-5 place-items-center rounded-full text-[11px] font-medium ${view === 'profile' ? 'bg-white/20 text-white' : 'bg-zinc-200 text-zinc-700'}`}>{user.name.trim() ? user.name.trim()[0] : '江'}</span>
+              <span className="text-[11.5px] font-medium">{user.name}</span>
+            </button>
           </div>
         </header>
 
         {view === 'class' ? (
           <Workbench data={workbench} onOpenStudent={openStudent} onBatchFiles={handleBatchFiles} onOpenResult={openBatchResult} batchResults={batchResults} busy={busy || batching} />
+        ) : view === 'profile' ? (
+          <Profile user={user} onUpdate={(patch) => setUser((u) => (u ? { ...u, ...patch } : u))} />
         ) : (
           <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
             {/* 左：AI 评阅 */}
@@ -886,6 +935,14 @@ export default function Page() {
               </Section>
             </div>
           )}
+        </SheetContent>
+      </Sheet>
+
+      {/* 评分细则管理抽屉 */}
+      <Sheet open={rubricOpen} onOpenChange={setRubricOpen}>
+        <SheetContent side="right" className="bg-zinc-50 p-0">
+          <SheetDescription className="sr-only">评分细则管理</SheetDescription>
+          <RubricEditor initial={rubric} onSave={(r) => { saveRubric(r); setRubricOpen(false) }} />
         </SheetContent>
       </Sheet>
     </div>

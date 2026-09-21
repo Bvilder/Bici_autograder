@@ -1,4 +1,4 @@
-import type { Chunk, GradedPoint, Verdict } from './types'
+import type { Chunk, GradedPoint, SimpleRubricPoint, Verdict } from './types'
 
 export const HEADING_RE = /^(#{1,6}\s+|\d+(\.\d+)*[\s、.．]+|[一二三四五六七八九十]+[、.．]+|第[一二三四五六七八九十\d]+[章节部分][\s:：]+|[\u4e00-\u9fa5]{2,15}[:：]\s*)/
 
@@ -84,6 +84,36 @@ export const RUBRIC_BANK: RubricPoint[] = [
   },
 ]
 
+// 老师可编辑的默认评分细则（RUBRIC_BANK 的简化形态）
+export const DEFAULT_RUBRIC: SimpleRubricPoint[] = RUBRIC_BANK.map((p) => ({
+  id: p.id,
+  title: p.title,
+  maxScore: p.maxScore,
+  mustInclude: p.mustInclude,
+  criteria: p.criteria,
+}))
+
+// 把老师录入的简化评分点补全为完整评分点（自动生成扣分规则与建议）
+export function normalizeRubric(points: SimpleRubricPoint[]): RubricPoint[] {
+  return points
+    .filter((p) => p.title.trim())
+    .map((p, i) => {
+      const criteria = p.criteria.map((c) => c.trim()).filter(Boolean)
+      const mustInclude = p.mustInclude.map((m) => m.trim()).filter(Boolean)
+      const finalCriteria = criteria.length ? criteria : ['表述完整']
+      return {
+        id: p.id || `p${i + 1}`,
+        title: p.title.trim(),
+        maxScore: Math.max(1, Math.round(p.maxScore) || 10),
+        mustInclude,
+        criteria: finalCriteria,
+        deductionPool: finalCriteria.map((c) => ({ label: `「${c}」未达标`, amount: 2 })),
+        suggestion: `请围绕「${mustInclude.join('、') || p.title.trim()}」补充完善相关表述与依据。`,
+        fullSuggestion: `${p.title.trim()}要点齐全、表述清晰，完成度较高。`,
+      }
+    })
+}
+
 export function hash(s: string): number {
   let h = 2166136261
   for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) }
@@ -153,6 +183,7 @@ export function pickDeductions(pool: { label: string; amount: number }[], defici
     picked.push({ label: d.label, amount: take })
     remaining -= take
   }
+  if (remaining > 0) picked.push({ label: '其他评分要点未满足', amount: remaining })
   return picked
 }
 
@@ -163,17 +194,51 @@ export function gradeForRatio(ratio: number): string {
   return '不及格'
 }
 
+// 关键词匹配：返回命中/未命中的要点（大小写不敏感、忽略空白）
+export function matchKeywords(reportText: string, keywords: string[]): { matched: string[]; unmatched: string[] } {
+  const norm = reportText.replace(/\s+/g, '').toLowerCase()
+  const matched: string[] = []
+  const unmatched: string[] = []
+  for (const k of keywords) {
+    const kn = k.trim().replace(/\s+/g, '').toLowerCase()
+    if (kn.length < 2) continue
+    if (norm.includes(kn)) matched.push(k.trim())
+    else unmatched.push(k.trim())
+  }
+  return { matched, unmatched }
+}
+
+// 把扣分 deficit 平均分摊到未命中的要点上
+export function distributeDeficit(unmatched: string[], deficit: number): { label: string; amount: number }[] {
+  if (unmatched.length === 0 || deficit <= 0) return []
+  const base = Math.floor(deficit / unmatched.length)
+  const rem = deficit % unmatched.length
+  return unmatched.map((k, i) => ({ label: `未体现「${k}」`, amount: base + (i < rem ? 1 : 0) }))
+}
+
 // 给定评分点 + 写死的 {score, verdict} + 报告 chunks，生成完整 GradedPoint（证据取真实子串）
-export function composePoint(rubric: RubricPoint, cfg: { score: number; verdict: Verdict }, chunks: Chunk[], idx: number): GradedPoint {
+export function composePoint(rubric: RubricPoint, cfg: { score: number; verdict: Verdict }, chunks: Chunk[], idx: number, match?: { matched: string[]; unmatched: string[] }): GradedPoint {
   const n = chunks.length
-  const ci = n <= 1 ? 0 : 1 + (idx % (n - 1))
-  const chunk = chunks[ci]
+  let ci = n <= 1 ? 0 : 1 + (idx % (n - 1))
+  let chunk = chunks[ci]
+
+  // 关键词匹配时，优先定位到包含命中关键词的块，让证据更贴切
+  if (match && match.matched.length && n > 0) {
+    const norm = (s: string) => s.replace(/\s+/g, '').toLowerCase()
+    const hit = chunks.find((c) => match!.matched.some((k) => norm(c.text).includes(norm(k))))
+    if (hit) chunk = hit
+  }
+
   const quote = cfg.verdict === 'missing' ? '' : pickQuote(chunk)
   const evidence = chunk && quote ? [{ chunkId: chunk.id, quote, matched: true }] : []
   const anchor = evidence.length ? evidence[0].chunkId : null
 
   const lost = rubric.maxScore - cfg.score
-  const deductions = cfg.verdict === 'full' ? [] : pickDeductions(rubric.deductionPool, lost)
+  const deductions = cfg.verdict === 'full'
+    ? []
+    : match
+      ? distributeDeficit(match.unmatched, lost)
+      : pickDeductions(rubric.deductionPool, lost)
   const falseCount = cfg.verdict === 'full' ? 0 : cfg.verdict === 'missing' ? rubric.criteria.length : Math.min(Math.max(deductions.length, 1), rubric.criteria.length)
   const criteriaMet = rubric.criteria.map((_, i) => i < rubric.criteria.length - falseCount)
 
@@ -181,23 +246,29 @@ export function composePoint(rubric: RubricPoint, cfg: { score: number; verdict:
   let missing = ''
   let suggestion: string
   if (cfg.verdict === 'missing') {
-    reason = '报告中未找到支撑该评分点的明确原文，故该项不给分。'
+    reason = match && match.unmatched.length
+      ? `报告中未找到「${match.unmatched.join('」「')}」等要点，该项不给分。`
+      : '报告中未找到支撑该评分点的明确原文，故该项不给分。'
     missing = (rubric.mustInclude.length ? rubric.mustInclude.map((m) => `「${m}」`).join('、') : '核心要求') + ' 均未在报告中体现'
     suggestion = '需要补充：' + rubric.suggestion
   } else if (cfg.verdict === 'full') {
-    reason = `第「${chunk?.section ?? '相关'}」部分已写明相关要求，该项完整满足。`
+    reason = match && match.matched.length
+      ? `已覆盖「${match.matched.join('」「')}」等要点，该项完整满足。`
+      : `第「${chunk.section}」部分已写明相关要求，该项完整满足。`
     suggestion = rubric.fullSuggestion
   } else {
-    reason = `存在 ${deductions.map((d) => `「${d.label}」`).join('、')} 等问题，故部分给分。`
-    missing = '未充分体现：' + rubric.mustInclude.map((m) => `「${m}」`).join('、')
+    reason = match && match.unmatched.length
+      ? `未体现「${match.unmatched.join('」「')}」，故部分给分。`
+      : `存在 ${deductions.map((d) => `「${d.label}」`).join('、')} 等问题，故部分给分。`
+    missing = '未充分体现：' + (match && match.unmatched.length ? match.unmatched.map((m) => `「${m}」`).join('、') : rubric.mustInclude.map((m) => `「${m}」`).join('、'))
     suggestion = rubric.suggestion
   }
 
   const logic = cfg.verdict === 'full'
-    ? '要点齐全、表述清晰，未发现缺项。'
+    ? (match && match.matched.length ? `已覆盖「${match.matched.join('」「')}」全部要点，判定达标。` : '要点齐全、表述清晰，未发现缺项。')
     : cfg.verdict === 'missing'
-      ? '原文中未见与评分要求相关的表述，判定证据缺失。'
-      : `仅覆盖部分评分要点，存在 ${deductions.map((d) => `「${d.label}」`).join('、')} 等问题，故扣分。`
+      ? (match && match.unmatched.length ? `「${match.unmatched.join('」「')}」均未命中，判定证据缺失。` : '原文中未见与评分要求相关的表述，判定证据缺失。')
+      : (match && match.unmatched.length ? `命中 ${match.matched.length}/${match.matched.length + match.unmatched.length} 个要点，缺「${match.unmatched.join('」「')}」。` : `仅覆盖部分评分要点，存在 ${deductions.map((d) => `「${d.label}」`).join('、')} 等问题，故扣分。`)
 
   return {
     pointId: rubric.id,

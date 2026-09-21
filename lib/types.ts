@@ -15,6 +15,15 @@ export type Evidence = {
 
 export type Deduction = { label: string; amount: number }
 
+// 老师录入的简化评分点（编辑器里可编辑的字段）
+export type SimpleRubricPoint = {
+  id: string
+  title: string
+  maxScore: number
+  mustInclude: string[]
+  criteria: string[]
+}
+
 export type GradedPoint = {
   pointId: string
   title: string
