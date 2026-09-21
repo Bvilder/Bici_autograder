@@ -1,36 +1,37 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 🎓 AutoGrader - AI 智能评阅助手
 
-## Getting Started
+> **深大计软 & 腾讯云 · 粤港澳大湾区 AI Coding 创新大赛**  
+> 赛题方向：AI + 教学管理助手（AutoGrader）
 
-First, run the development server:
+AutoGrader 是一款面向高校计算机专业的**实验报告智能评阅平台**。教师只需粘贴或上传实验报告，系统即可基于自定义的评分标准（Rubric），进行逐项核查、给出带原文证据的评分，并自动生成改进建议。
 
+## ✨ 核心亮点
+
+- 💬 **ChatGPT 对话式交互**：告别复杂的表单，教师可以直接对话式发出评阅指令。
+- 📍 **证据可溯源（原文高亮回跳）**：每个评分点都附带原文引用证据，点击即可在右侧原文中高亮定位，拒绝 AI 幻觉。
+- 📊 **可视化数据看板**：一键生成全班成绩汇总，包含环形进度条、雷达图与成绩分布。
+- 🗂️ **侧边抽屉评分依据**：点击卡片可展开详细的打分细则与 AI 判定逻辑链。
+- ⚡ **本地模拟数据保障（重要）**：因赛事规则明确禁止使用外部 API，本作品采用了高度拟真的本地模拟数据，以保证演示零风险、100% 稳定。
+
+## 🛠️ 技术栈
+
+- **框架**：Next.js 15 (App Router) + TypeScript
+- **样式**：Tailwind CSS + Shadcn/ui (自实现)
+- **动画**：Framer Motion (流式卡片渐进动画、雷达图扫入)
+- **图标**：Lucide React
+- **工具库**：clsx, tailwind-merge
+- **部署**：Vercel
+
+## 🚀 快速启动
+
+### 环境要求
+- Node.js 18 或以上版本
+
+### Windows 用户（一键启动，推荐）
+直接双击根目录下的 **`启动演示.bat`** 即可，脚本会自动完成依赖安装并启动项目。
+
+### Mac / Linux 用户
+请在终端执行：
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
-
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
-
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
