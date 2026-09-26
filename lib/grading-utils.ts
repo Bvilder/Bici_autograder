@@ -11,6 +11,10 @@ export type RubricPoint = {
   deductionPool: { label: string; amount: number }[]
   suggestion: string
   fullSuggestion: string
+  // 该评分点应引用的报告章节标题关键词（用于精准定位原文证据）
+  sectionHints: string[]
+  // 正文内容关键词兜底（当报告缺少对应章节标题时，按内容匹配，如 PCB / ready_queue）
+  textHints?: string[]
 }
 
 // 6 个评分点（评分知识库）。每个评分点带一条专属的修改建议，避免通用废话和重复
@@ -25,6 +29,7 @@ export const RUBRIC_BANK: RubricPoint[] = [
     ],
     suggestion: '原理部分过于简略。请补写时间片轮转的调度流程（取队首 → 执行一个时间片 → 未完成则重新入队）和优先级调度的判定规则，并说明本次采用的是静态优先级。',
     fullSuggestion: '目的、原理与实验内容对应完整。可再补一句与真实操作系统调度器（如 Linux CFS）的对应关系，让原理更有纵深。',
+    sectionHints: ['实验目的', '实验原理'],
   },
   {
     id: 'p2', title: '时间片轮转算法实现', maxScore: 25,
@@ -37,6 +42,8 @@ export const RUBRIC_BANK: RubricPoint[] = [
     ],
     suggestion: '核心 bug 是缺少 remaining ≤ 0 的收尾分支：时间片恰好耗尽时，进程既没重新入队也没标记完成。请把 if (p.remaining > 0) 改成 if/else，else 分支置 p.state = FINISHED，并在循环体末尾加 ctx_switches++ 统计上下文切换次数。',
     fullSuggestion: '主循环结构、时间片耗尽处理与上下文切换计数都正确，实现严谨。',
+    sectionHints: ['核心算法', '算法实现', '实验内容'],
+    textHints: ['ready_queue', 'while', '时间片'],
   },
   {
     id: 'p3', title: '关键数据结构设计', maxScore: 15,
@@ -48,6 +55,8 @@ export const RUBRIC_BANK: RubricPoint[] = [
     ],
     suggestion: 'PCB 字段或队列选型说明不完整。请逐个说明 pid、state、remaining、priority 字段的含义，并解释就绪队列用 queue（FIFO 出队）、阻塞队列用 list（需随机删除）的原因。',
     fullSuggestion: '字段定义完整、queue/list 选型理由清晰，工程习惯很好。',
+    sectionHints: ['数据结构', '数据结构设计'],
+    textHints: ['PCB', 'pid', 'remaining', 'ready_queue'],
   },
   {
     id: 'p4', title: '测试与结果分析', maxScore: 20,
@@ -59,6 +68,7 @@ export const RUBRIC_BANK: RubricPoint[] = [
     ],
     suggestion: '只有一组测试数据，无法反映算法在不同时间片下的表现。请补做时间片 1/2/4/8 四组对照，用表格记录每组平均周转时间与平均等待时间，并说明等待时间随片长增大的趋势。',
     fullSuggestion: '测试用例充分、四组对照完整、结果以表格呈现，验证严谨。',
+    sectionHints: ['测试', '结果分析'],
   },
   {
     id: 'p5', title: '性能对比与实验结论', maxScore: 15,
@@ -70,6 +80,7 @@ export const RUBRIC_BANK: RubricPoint[] = [
     ],
     suggestion: '对比结论里的 23% 没有推导过程。请列出 FCFS 与 RR 的平均等待时间原始数据，并写出 (5.5 − 4.2) / 5.5 ≈ 23.6% 的换算过程，让每个数字都可追溯。',
     fullSuggestion: '对比有数据、有推导公式，结论可信度高。',
+    sectionHints: ['性能', '对比', '实验结论', '结论'],
   },
   {
     id: 'p6', title: '报告格式与引用规范', maxScore: 15,
@@ -81,6 +92,7 @@ export const RUBRIC_BANK: RubricPoint[] = [
     ],
     suggestion: '图表编号与正文引用未一一对应。请为每个表格/图补上「表 1」「图 1」编号，并在正文中用「如表 1 所示」明确引用，最后补一条参考文献。',
     fullSuggestion: '格式规范、图表编号与正文引用齐全，无可挑剔。',
+    sectionHints: ['格式', '引用', '结论'],
   },
 ]
 
@@ -110,6 +122,8 @@ export function normalizeRubric(points: SimpleRubricPoint[]): RubricPoint[] {
         deductionPool: finalCriteria.map((c) => ({ label: `「${c}」未达标`, amount: 2 })),
         suggestion: `请围绕「${mustInclude.join('、') || p.title.trim()}」补充完善相关表述与依据。`,
         fullSuggestion: `${p.title.trim()}要点齐全、表述清晰，完成度较高。`,
+        sectionHints: p.sectionHints && p.sectionHints.length ? p.sectionHints : mustInclude,
+        textHints: p.textHints && p.textHints.length ? p.textHints : undefined,
       }
     })
 }
@@ -216,17 +230,42 @@ export function distributeDeficit(unmatched: string[], deficit: number): { label
   return unmatched.map((k, i) => ({ label: `未体现「${k}」`, amount: base + (i < rem ? 1 : 0) }))
 }
 
+// 根据评分点的章节提示，从 chunks 中精准定位应引用证据的块。
+// 优先匹配章节标题（sectionHints），其次按正文关键词兜底（textHints），
+// 避免把「姓名」「实验原理」等无关内容错当成某个评分点的原文证据。
+export function pickChunkForPoint(rubric: RubricPoint, chunks: Chunk[]): Chunk | null {
+  if (chunks.length === 0) return null
+  const norm = (s: string) => s.replace(/\s+/g, '').toLowerCase()
+  const sectionHints = rubric.sectionHints ?? []
+  const textHints = rubric.textHints ?? []
+
+  // 第一优先：章节标题命中
+  for (const h of sectionHints) {
+    const c = chunks.find((ch) => norm(ch.section).includes(norm(h)))
+    if (c) return c
+  }
+  // 第二优先：章节标题或正文命中（含内容兜底关键词）
+  for (const h of [...sectionHints, ...textHints]) {
+    const c = chunks.find((ch) => norm(ch.section).includes(norm(h)) || norm(ch.text).includes(norm(h)))
+    if (c) return c
+  }
+  return null
+}
+
 // 给定评分点 + 写死的 {score, verdict} + 报告 chunks，生成完整 GradedPoint（证据取真实子串）
 export function composePoint(rubric: RubricPoint, cfg: { score: number; verdict: Verdict }, chunks: Chunk[], idx: number, match?: { matched: string[]; unmatched: string[] }): GradedPoint {
   const n = chunks.length
-  let ci = n <= 1 ? 0 : 1 + (idx % (n - 1))
-  let chunk = chunks[ci]
 
-  // 关键词匹配时，优先定位到包含命中关键词的块，让证据更贴切
+  // 关键词匹配模式：优先定位到包含命中关键词的块（最贴切）
+  let chunk: Chunk
+  const fallback = chunks[Math.min(idx, n - 1)]
   if (match && match.matched.length && n > 0) {
     const norm = (s: string) => s.replace(/\s+/g, '').toLowerCase()
     const hit = chunks.find((c) => match!.matched.some((k) => norm(c.text).includes(norm(k))))
-    if (hit) chunk = hit
+    chunk = hit || pickChunkForPoint(rubric, chunks) || fallback
+  } else {
+    // 默认/基准报告模式：按章节语义定位，避免证据张冠李戴
+    chunk = pickChunkForPoint(rubric, chunks) || fallback
   }
 
   const quote = cfg.verdict === 'missing' ? '' : pickQuote(chunk)

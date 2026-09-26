@@ -22,6 +22,8 @@ export type SimpleRubricPoint = {
   maxScore: number
   mustInclude: string[]
   criteria: string[]
+  sectionHints?: string[]
+  textHints?: string[]
 }
 
 export type GradedPoint = {

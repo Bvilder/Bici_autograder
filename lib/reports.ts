@@ -17,7 +17,7 @@ type ReportSpec = {
 const SPECS: ReportSpec[] = [
   {
     tier: '上等',
-    aiRate: 71,
+    aiRate: 8,
     scores: {
       p1: { score: 10, verdict: 'full' },
       p2: { score: 22, verdict: 'partial' },
@@ -107,7 +107,7 @@ while (!ready_queue.empty()) {
   },
   {
     tier: '次等',
-    aiRate: 8,
+    aiRate: 71,
     scores: {
       p1: { score: 6, verdict: 'partial' },
       p2: { score: 15, verdict: 'partial' },
@@ -261,8 +261,8 @@ export const STUDENTS: Student[] = STUDENT_SPECS.map((s) => ({
   weaknesses: s.weaknesses,
 }))
 
-// AI 率偏高（>50%）的学生数 = 上等档（AI 71%）
-export const HIGH_AI_COUNT = STUDENT_SPECS.filter((s) => s.tier === '上等').length
+// AI 率偏高（>50%）的学生数 = 次等档（AI 71%），即低分报告 AI 率更高
+export const HIGH_AI_COUNT = STUDENT_SPECS.filter((s) => s.tier === '次等').length
 
 // 按学生 id 返回其完整一致的评阅结果
 export function studentResultOf(id: string): GradeResult | null {
