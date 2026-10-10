@@ -1,0 +1,30 @@
+const fs = require('fs')
+const base = `操作系统实验二：进程调度算法实现
+姓名：测试同学
+
+一、实验目的
+本实验旨在通过实现时间片轮转与优先级调度两种算法，理解进程调度中上下文切换的开销来源，并掌握 PCB 的构造方式与就绪队列的组织形式。
+
+二、实验原理
+系统将所有就绪进程按先来先服务顺序排成队列，每次调度把处理器分配给队首进程，令其执行一个时间片。时间片用完后，该进程被剥夺处理器并重新排到队尾，形成轮转。
+
+三、数据结构设计
+进程控制块采用结构体 PCB 描述，包含 pid、state、remaining、priority 四个字段；就绪队列使用 queue 组织，阻塞队列使用 list 以便随机删除。
+
+四、核心算法实现
+while (!ready_queue.empty()) { PCB p = ready_queue.front(); ready_queue.pop(); p.remaining -= time_slice; if (p.remaining > 0) ready_queue.push(p); }
+
+五、测试与结果分析
+以 5 个进程、时间片等于 2 的一组数据测试，平均周转时间为 6.8，平均等待时间为 4.2。
+
+六、性能对比
+相比先来先服务，轮转调度的平均等待时间缩短约 23%，但上下文切换次数增加了一倍。
+
+七、实验结论
+通过本次实验，我理解了调度算法的设计需要在响应时间与切换开销之间做权衡。
+
+`
+let out = ''
+for (let i = 0; i < 25; i++) out += base
+fs.writeFileSync('scripts/_long_report.txt', out)
+console.log('generated length', out.length)

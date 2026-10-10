@@ -12,15 +12,24 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* 公共工具样式（教师端 / 学生端共用） */
+.ag-scroll::-webkit-scrollbar{width:9px;height:9px}
+.ag-scroll::-webkit-scrollbar-track{background:transparent}
+.ag-scroll::-webkit-scrollbar-thumb{background:rgba(9,9,11,.13);border-radius:99px;border:2.5px solid transparent;background-clip:content-box}
+.ag-scroll::-webkit-scrollbar-thumb:hover{background:rgba(9,9,11,.24);background-clip:content-box}
+.ag-anchor{border-radius:4px;transition:background-color .5s ease,box-shadow .5s ease}
+.ag-anchor-on{background-color:rgba(253,224,71,.5);animation:ag-flash .75s ease-out,ag-ripple 1.6s ease-out .75s infinite}
+.ag-anchor-weak-on{background-color:rgba(225,29,72,.12);box-shadow:0 0 0 4px rgba(225,29,72,.16);animation:ag-flash-weak .75s ease-out}
+@keyframes ag-flash{0%{background-color:rgba(253,224,71,0);box-shadow:0 0 0 0 rgba(253,224,71,0)}45%{background-color:rgba(253,224,71,.9);box-shadow:0 0 0 8px rgba(253,224,71,.38)}100%{background-color:rgba(253,224,71,.5);box-shadow:0 0 0 4px rgba(253,224,71,.22)}}
+@keyframes ag-ripple{0%{box-shadow:0 0 0 0 rgba(253,224,71,.5)}70%{box-shadow:0 0 0 14px rgba(253,224,71,0)}100%{box-shadow:0 0 0 0 rgba(253,224,71,0)}}
+@keyframes ag-flash-weak{0%{background-color:rgba(244,63,94,0);box-shadow:0 0 0 0 rgba(244,63,94,0)}45%{background-color:rgba(244,63,94,.34);box-shadow:0 0 0 8px rgba(244,63,94,.22)}100%{background-color:rgba(225,29,72,.12);box-shadow:0 0 0 4px rgba(225,29,72,.16)}}
+@keyframes ag-spin{to{transform:rotate(360deg)}}
+.ag-spin{animation:ag-spin .8s linear infinite}
+@media (prefers-reduced-motion:reduce){.ag-anchor-on,.ag-anchor-weak-on,.ag-spin{animation:none}}
+

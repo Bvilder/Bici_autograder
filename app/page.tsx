@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Sparkles, Send, FileText, Quote, Lightbulb, Crosshair, Highlighter,
-  Check, X, Minus, Download, Copy, RotateCcw, Paperclip,
+  Check, X, Minus, Download, Copy, RotateCcw, Paperclip, LogOut,
   Info, Target, ListChecks, ChevronRight, NotebookPen, ScanSearch, BookOpen, Wrench, Users, SlidersHorizontal,
 } from 'lucide-react'
 import {
@@ -14,7 +14,8 @@ import ReportViewer from '@/components/ReportViewer'
 import UploadDropzone from '@/components/UploadDropzone'
 import Workbench from '@/components/Workbench'
 import RubricEditor from '@/components/RubricEditor'
-import Login from '@/components/Login'
+import RoleLogin from '@/components/RoleLogin'
+import StudentDashboard from '@/components/StudentDashboard'
 import Profile from '@/components/Profile'
 import type { Chunk, GradedPoint, GradeResult, SimpleRubricPoint, Student, Verdict, WorkbenchData } from '@/lib/types'
 import { DEFAULT_RUBRIC } from '@/lib/grading-utils'
@@ -178,9 +179,10 @@ type Intent =
   | { kind: 'table' }
   | { kind: 'comments' }
   | { kind: 'fix'; topic: string }
+  | { kind: 'chat' }
 
 type Reply =
-  | { kind: 'grade'; points: GradedPoint[]; aiRate?: number; summary?: { comment: string; grade: string } }
+  | { kind: 'grade'; points: GradedPoint[]; aiRate?: number; summary?: { comment: string; grade: string }; mode?: string; model?: string; fallback?: boolean; fallbackReason?: string }
   | { kind: 'point-detail'; point: GradedPoint }
   | { kind: 'knowledge'; items: KnowledgeItem[] }
   | { kind: 'table'; caption: string; head: string[]; rows: string[][] }
@@ -188,12 +190,27 @@ type Reply =
   | { kind: 'fix'; title: string; steps: string[]; code?: string }
   | { kind: 'text'; content: string }
 
+// 从 GradeResult 构建 grade 回复，带上评分模式信息（真实 AI / 降级）
+function gradeReply(r: GradeResult): Extract<Reply, { kind: 'grade' }> {
+  const meta = r.meta ?? {}
+  return {
+    kind: 'grade',
+    points: r.points,
+    aiRate: r.aiRate,
+    summary: r.summary,
+    mode: typeof meta.mode === 'string' ? meta.mode : '',
+    model: typeof meta.model === 'string' ? meta.model : undefined,
+    fallback: meta.fallback === true,
+    fallbackReason: typeof meta.fallbackReason === 'string' ? meta.fallbackReason : undefined,
+  }
+}
+
 type Message =
   | { id: string; role: 'user'; text: string }
   | { id: string; role: 'assistant'; reply: Reply; visible: number }
 
 type NotebookItem = { pointId: string; title: string; suggestion: string }
-type Toast = { title: string; detail: string; mode: 'anchor' | 'weak' }
+type Toast = { title: string; detail: string; mode: 'anchor' | 'weak' | 'memory' }
 
 function intentOf(text: string): Intent {
   const t = text.trim()
@@ -208,7 +225,21 @@ function intentOf(text: string): Intent {
   if (/知识|知识点|查阅|概念|原理讲解/.test(t)) return { kind: 'knowledge' }
   if (/汇总|成绩表|全班|名次|排名/.test(t)) return { kind: 'table' }
   if (/评语/.test(t)) return { kind: 'comments' }
-  return { kind: 'grade' }
+  // 明确要求评分/批阅才进入评分环节，避免随便一句「你好」就触发评分
+  if (/评阅|评分|评改|批改|批阅|打分|评一评|重新评|帮我评/.test(t)) return { kind: 'grade' }
+  return { kind: 'chat' }
+}
+
+function chatReply(text: string): string {
+  const t = text.trim()
+  if (/^(你好|您好|hi|hello|嗨|哈喽|在吗|在么)/i.test(t)) {
+    return '你好！我是「彼此_Autograder」的 AI 助教。你可以直接上传实验报告让我逐点评分，或输入「帮我评改报告」「生成全班成绩汇总表」等指令。'
+  }
+  if (/谢谢|感谢|辛苦/.test(t)) return '不客气，有需要随时找我～'
+  if (/你是谁|能做什么|会什么|怎么用|帮助|介绍一下|功能|用途/.test(t)) {
+    return '我是可解释的 AI 评分助教。我能：① 逐评分点核查实验报告，并给出可溯源到原文的证据；② 定位扣分点、解释扣分原因；③ 讲解相关知识点；④ 生成全班成绩汇总表与个性化评语。上传报告即可自动评阅。'
+  }
+  return '这个我还没接上对应功能～ 你可以试试：上传报告自动评阅、输入「帮我评改」开始评分，或问我某个知识点。'
 }
 
 /* ------------------------------------------------------------------ */
@@ -329,6 +360,7 @@ function loadRubric(): SimpleRubricPoint[] {
 
 export default function Page() {
   const [view, setView] = useState<'grade' | 'class' | 'profile'>('grade')
+  const [role, setRole] = useState<'teacher' | 'student' | null>(null)
   const [user, setUser] = useState<{ name: string; signature: string } | null>(null)
   const [report, setReport] = useState<GradeResult | null>(null)
   const [reportText, setReportText] = useState('')
@@ -340,6 +372,7 @@ export default function Page() {
   const [input, setInput] = useState('')
   const [phase, setPhase] = useState<'idle' | 'loading' | 'revealing'>('idle')
   const [step, setStep] = useState(0)
+  const [liveStep, setLiveStep] = useState<string | null>(null)
   const [reveal, setReveal] = useState<{ msgId: string; count: number; total: number } | null>(null)
   const [activeAnchor, setActiveAnchor] = useState<string | null>(null)
   const [weakAnchor, setWeakAnchor] = useState<string | null>(null)
@@ -378,7 +411,48 @@ export default function Page() {
     return () => clearTimeout(timer)
   }, [reveal])
 
-  async function fetchGrade(text: string, name: string): Promise<GradeResult | { ok: false; error: string }> {
+  async function readGradeStream(res: Response, onStep?: (label: string) => void): Promise<GradeResult | { ok: false; error: string }> {
+    const ct = res.headers.get('content-type') || ''
+    // 兼容 JSON 响应（后端未开流式 / 旧版本时）
+    if (!ct.includes('text/event-stream') || !res.body) {
+      try {
+        const data = await res.json()
+        if (data && data.ok) return data as GradeResult
+        return { ok: false, error: (data && data.error) || `评阅服务异常（HTTP ${res.status}）` }
+      } catch {
+        return { ok: false, error: `评阅服务异常（HTTP ${res.status}）` }
+      }
+    }
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buf = ''
+    let final: GradeResult | null = null
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buf += decoder.decode(value, { stream: true })
+      const parts = buf.split('\n\n')
+      buf = parts.pop() ?? ''
+      for (const p of parts) {
+        const line = p.trim()
+        if (!line.startsWith('data:')) continue
+        let ev: { type?: string; label?: string; result?: GradeResult; fallback?: boolean; reason?: string }
+        try { ev = JSON.parse(line.slice(5).trim()) } catch { continue }
+        if (!ev) continue
+        if (ev.type === 'step' && ev.label) onStep?.(ev.label)
+        else if (ev.type === 'result') {
+          final = ev.result ?? null
+          if (final && ev.fallback !== undefined) {
+            final.meta = { ...(final.meta || {}), fallback: !!ev.fallback, fallbackReason: ev.reason ?? null }
+          }
+        }
+      }
+    }
+    if (final) return final
+    return { ok: false, error: '未收到评阅结果' }
+  }
+
+  async function fetchGrade(text: string, name: string, onStep?: (label: string) => void): Promise<GradeResult | { ok: false; error: string }> {
     try {
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(), 30000)
@@ -386,7 +460,7 @@ export default function Page() {
       const res = await fetch('/api/grade', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal: controller.signal })
       clearTimeout(timer)
       if (!res.ok) return { ok: false, error: `评阅服务异常（HTTP ${res.status}），请稍后重试` }
-      return await res.json()
+      return await readGradeStream(res, onStep)
     } catch {
       return { ok: false, error: '评阅请求失败，请确认后端服务已启动' }
     }
@@ -404,9 +478,10 @@ export default function Page() {
     setReportName(name)
     setPhase('loading')
     setStep(0)
+    setLiveStep(null)
     let data: GradeResult | { ok: false; error: string }
     try {
-      ;[data] = await Promise.all([fetchGrade(text, name), sleep(1200)])
+      ;[data] = await Promise.all([fetchGrade(text, name, (label) => setLiveStep(label)), sleep(1200)])
     } catch {
       data = { ok: false, error: '评阅请求失败，请重试' }
     }
@@ -417,7 +492,7 @@ export default function Page() {
     }
     setReport(data)
     const msgId = `a${Date.now()}`
-    setMessages((m) => [...m, { id: msgId, role: 'assistant', reply: { kind: 'grade', points: data.points, aiRate: data.aiRate, summary: data.summary }, visible: 0 }])
+    setMessages((m) => [...m, { id: msgId, role: 'assistant', reply: gradeReply(data), visible: 0 }])
     setPhase('revealing')
     setReveal({ msgId, count: 0, total: data.points.length })
   }
@@ -459,6 +534,7 @@ export default function Page() {
     if (intent.kind === 'knowledge') reply = { kind: 'knowledge', items: KNOWLEDGE }
     else if (intent.kind === 'table') reply = { kind: 'table', ...CLASS_TABLE }
     else if (intent.kind === 'comments') reply = { kind: 'comments', items: COMMENTS }
+    else if (intent.kind === 'chat') reply = { kind: 'text', content: chatReply(t) }
     else reply = { kind: 'fix', ...resolveFix(intent.topic) }
     setMessages((m) => [...m, { id: `a${Date.now()}`, role: 'assistant', reply, visible: 0 }])
   }
@@ -466,7 +542,7 @@ export default function Page() {
   async function handleFile(file: File) {
     if (busy) return
     setMessages((m) => [...m, { id: `u${Date.now()}`, role: 'user', text: `请评改「${file.name}」` }])
-    setPhase('loading'); setStep(0)
+    setPhase('loading'); setStep(0); setLiveStep(null)
     const form = new FormData()
     form.append('file', file)
     let pdata: { ok: boolean; error?: string; fileName?: string; text?: string }
@@ -515,7 +591,7 @@ export default function Page() {
     setActiveAnchor(null); setWeakAnchor(null); setToast(null)
     setMessages([
       { id: `u${Date.now()}`, role: 'user', text: `评改「${s.name}」的报告` },
-      { id: `a${Date.now()}`, role: 'assistant', reply: { kind: 'grade', points: r.points, aiRate: r.aiRate, summary: r.summary }, visible: r.points.length },
+      { id: `a${Date.now()}`, role: 'assistant', reply: gradeReply(r), visible: r.points.length },
     ])
   }
 
@@ -546,8 +622,7 @@ export default function Page() {
           const pres = await fetch('/api/parse', { method: 'POST', body: form })
           const pdata = await pres.json()
           if (!pdata.ok) continue
-          const gres = await fetch('/api/grade', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reportText: pdata.text, fileName: pdata.fileName }) })
-          const gdata = await gres.json()
+          const gdata = await fetchGrade(pdata.text, pdata.fileName)
           if (gdata.ok) setBatchResults((r) => [gdata, ...r])
         } catch { /* 单份失败跳过 */ }
       }
@@ -566,7 +641,7 @@ export default function Page() {
     setView('grade')
     setMessages([
       { id: `u${Date.now()}`, role: 'user', text: `查看「${r.fileName ?? '报告'}」的批阅结果` },
-      { id: `a${Date.now()}`, role: 'assistant', reply: { kind: 'grade', points: r.points, aiRate: r.aiRate, summary: r.summary }, visible: r.points.length },
+      { id: `a${Date.now()}`, role: 'assistant', reply: gradeReply(r), visible: r.points.length },
     ])
   }
 
@@ -605,6 +680,22 @@ export default function Page() {
     })
   }
 
+  // 教师手动改分：更新分数 + 记忆偏好提示
+  const adjustScore = (p: GradedPoint, delta: number) => {
+    const newScore = Math.max(0, Math.min(p.maxScore, p.score + delta))
+    if (newScore === p.score) return
+    // 更新当前报告与对话里的分数
+    setReport((r) => (r ? { ...r, points: r.points.map((x) => (x.pointId === p.pointId ? { ...x, score: newScore } : x)) } : r))
+    setMessages((ms) => ms.map((m) => (m.role === 'assistant' && m.reply.kind === 'grade'
+      ? { ...m, reply: { ...m.reply, points: m.reply.points.map((x) => (x.pointId === p.pointId ? { ...x, score: newScore } : x)) } }
+      : m)))
+    // 记录偏好（记忆能力）：扣分 = 满分 - 实得分
+    const deducted = p.maxScore - newScore
+    const mem = `「${p.title}」扣分标准为 ${deducted} 分/处`
+    try { localStorage.setItem(`pref:${p.pointId}`, String(deducted)) } catch { /* ignore */ }
+    setToast({ title: '已记住您的偏好', detail: `${mem}，下次将按此标准执行。`, mode: 'memory' })
+  }
+
   const copyNotebook = () => navigator.clipboard?.writeText(notebook.map((i, idx) => `${idx + 1}. ${i.title}：${i.suggestion}`).join('\n'))
   const exportNotebook = () => download(['# 采纳记事簿', '', ...notebook.map((i, idx) => `${idx + 1}. **${i.title}**：${i.suggestion}`), ''].join('\n'), '采纳记事簿.md', 'text/markdown;charset=utf-8')
 
@@ -618,9 +709,23 @@ export default function Page() {
 
   const resetChat = () => { setMessages([]); setActiveAnchor(null); setWeakAnchor(null); setToast(null); setReveal(null); setPhase('idle') }
 
-  if (!user) {
-    return <Login onLogin={(name) => setUser({ name, signature: '' })} />
+  if (!role) {
+    return (
+      <RoleLogin
+        onSelect={(r) => {
+          setRole(r)
+          setUser({ name: r === 'teacher' ? '江老师' : '江水平平仄', signature: '' })
+          setView('grade')
+        }}
+      />
+    )
   }
+
+  if (role === 'student') {
+    return <StudentDashboard onLogout={() => setRole(null)} />
+  }
+
+  if (!user) return null
 
   return (
     <div
@@ -642,9 +747,10 @@ export default function Page() {
         .ag-scroll::-webkit-scrollbar-thumb{background:rgba(9,9,11,.13);border-radius:99px;border:2.5px solid transparent;background-clip:content-box}
         .ag-scroll::-webkit-scrollbar-thumb:hover{background:rgba(9,9,11,.24);background-clip:content-box}
         .ag-anchor{border-radius:4px;transition:background-color .5s ease,box-shadow .5s ease}
-        .ag-anchor-on{background-color:rgba(253,224,71,.5);box-shadow:0 0 0 4px rgba(253,224,71,.22);animation:ag-flash .75s ease-out}
+        .ag-anchor-on{background-color:rgba(253,224,71,.5);animation:ag-flash .75s ease-out,ag-ripple 1.6s ease-out .75s infinite}
         .ag-anchor-weak-on{background-color:rgba(225,29,72,.12);box-shadow:0 0 0 4px rgba(225,29,72,.16);animation:ag-flash-weak .75s ease-out}
         @keyframes ag-flash{0%{background-color:rgba(253,224,71,0);box-shadow:0 0 0 0 rgba(253,224,71,0)}45%{background-color:rgba(253,224,71,.9);box-shadow:0 0 0 8px rgba(253,224,71,.38)}100%{background-color:rgba(253,224,71,.5);box-shadow:0 0 0 4px rgba(253,224,71,.22)}}
+        @keyframes ag-ripple{0%{box-shadow:0 0 0 0 rgba(253,224,71,.5)}70%{box-shadow:0 0 0 14px rgba(253,224,71,0)}100%{box-shadow:0 0 0 0 rgba(253,224,71,0)}}
         @keyframes ag-flash-weak{0%{background-color:rgba(244,63,94,0);box-shadow:0 0 0 0 rgba(244,63,94,0)}45%{background-color:rgba(244,63,94,.34);box-shadow:0 0 0 8px rgba(244,63,94,.22)}100%{background-color:rgba(225,29,72,.12);box-shadow:0 0 0 4px rgba(225,29,72,.16)}}
         @keyframes ag-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
         .ag-in{animation:ag-in .38s cubic-bezier(.22,1,.36,1) both}
@@ -696,6 +802,13 @@ export default function Page() {
               <span className={`grid h-5 w-5 place-items-center rounded-full text-[11px] font-medium ${view === 'profile' ? 'bg-white/20 text-white' : 'bg-zinc-200 text-zinc-700'}`}>{user.name.trim() ? user.name.trim()[0] : '江'}</span>
               <span className="text-[11.5px] font-medium">{user.name}</span>
             </button>
+            <button
+              onClick={() => setRole(null)}
+              title="退出登录"
+              className="grid h-8 w-8 place-items-center rounded-lg text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700"
+            >
+              <LogOut className="h-3.5 w-3.5" />
+            </button>
           </div>
         </header>
 
@@ -704,7 +817,7 @@ export default function Page() {
         ) : view === 'profile' ? (
           <Profile user={user} onUpdate={(patch) => setUser((u) => (u ? { ...u, ...patch } : u))} />
         ) : (
-          <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+          <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] lg:grid-rows-[minmax(0,1fr)]">
             {/* 左：AI 评阅 */}
             <section className="relative flex min-h-0 flex-col overflow-hidden rounded-2xl border border-zinc-200/70 bg-white/75 shadow-[0_1px_2px_rgba(9,9,11,.04),0_10px_30px_-18px_rgba(9,9,11,.18)] backdrop-blur-xl">
               <header className="flex h-12 shrink-0 items-center gap-3 border-b border-zinc-200/60 bg-white/70 px-4">
@@ -748,7 +861,7 @@ export default function Page() {
                           <div className="max-w-[88%] rounded-2xl rounded-br-md bg-zinc-900 px-3.5 py-2.5 text-[12.5px] leading-relaxed text-white shadow-[0_1px_2px_rgba(9,9,11,.08)]">{m.text}</div>
                         </div>
                       ) : (
-                        <AssistantMessage key={m.id} reply={m.reply} visible={m.visible} activeAnchor={activeAnchor} adopted={adopted} onLocate={locate} onLocateAll={locateAllWeak} onOpenSheet={setSheetPoint} onAdopt={toggleAdopt} onExport={exportReport} onAskFix={(label) => send(`怎么修改「${label}」？`)} />
+                        <AssistantMessage key={m.id} reply={m.reply} visible={m.visible} activeAnchor={activeAnchor} adopted={adopted} onLocate={locate} onLocateAll={locateAllWeak} onOpenSheet={setSheetPoint} onAdopt={toggleAdopt} onAdjustScore={adjustScore} onExport={exportReport} onAskFix={(label) => send(`怎么修改「${label}」？`)} />
                       )
                     )}
 
@@ -758,7 +871,7 @@ export default function Page() {
                         <div className="flex-1 rounded-xl border border-zinc-200/80 bg-white px-3.5 py-3">
                           <div className="flex items-center gap-2">
                             <span className="ag-spin inline-block h-3.5 w-3.5 rounded-full border-2 border-zinc-200 border-t-zinc-500" />
-                            <span className="text-[12px] text-zinc-500">{STEPS[step]}…</span>
+                            <span className="text-[12px] text-zinc-500">{liveStep ?? STEPS[step]}…</span>
                           </div>
                           <div className="mt-2.5 space-y-1.5">
                             {[80, 62, 44].map((w, i) => <div key={i} className="h-2 animate-pulse rounded-full bg-zinc-100" style={{ width: `${w}%`, animationDelay: `${i * 0.12}s` }} />)}
@@ -858,8 +971,8 @@ export default function Page() {
 
               {toast && (
                 <div className="pointer-events-none absolute inset-x-0 bottom-0 p-4">
-                  <div className={`ag-in pointer-events-auto mx-auto flex max-w-[520px] items-center gap-2 rounded-xl border px-3 py-2 backdrop-blur ${toast.mode === 'weak' ? 'border-rose-300/70 bg-rose-50/95 text-rose-900' : 'border-amber-300/70 bg-amber-50/95 text-amber-900'}`}>
-                    {toast.mode === 'weak' ? <ScanSearch className="h-3.5 w-3.5 shrink-0 text-rose-500" /> : <Highlighter className="h-3.5 w-3.5 shrink-0 text-amber-600" />}
+                  <div className={`ag-in pointer-events-auto mx-auto flex max-w-[520px] items-center gap-2 rounded-xl border px-3 py-2 backdrop-blur ${toast.mode === 'weak' ? 'border-rose-300/70 bg-rose-50/95 text-rose-900' : toast.mode === 'memory' ? 'border-emerald-300/70 bg-emerald-50/95 text-emerald-900' : 'border-amber-300/70 bg-amber-50/95 text-amber-900'}`}>
+                    {toast.mode === 'weak' ? <ScanSearch className="h-3.5 w-3.5 shrink-0 text-rose-500" /> : toast.mode === 'memory' ? <Sparkles className="h-3.5 w-3.5 shrink-0 text-emerald-600" /> : <Highlighter className="h-3.5 w-3.5 shrink-0 text-amber-600" />}
                     <span className="truncate text-[11.5px]">
                       <span className="font-medium">{toast.title}</span>
                       <span className="mx-1.5 opacity-40">·</span>
@@ -962,7 +1075,7 @@ function Section({ title, icon, children }: { title: string; icon: ReactNode; ch
 /* 各类回复                                                            */
 /* ------------------------------------------------------------------ */
 
-function AssistantMessage({ reply, visible, activeAnchor, adopted, onLocate, onLocateAll, onOpenSheet, onAdopt, onExport, onAskFix }: {
+function AssistantMessage({ reply, visible, activeAnchor, adopted, onLocate, onLocateAll, onOpenSheet, onAdopt, onAdjustScore, onExport, onAskFix }: {
   reply: Reply
   visible: number
   activeAnchor: string | null
@@ -971,11 +1084,12 @@ function AssistantMessage({ reply, visible, activeAnchor, adopted, onLocate, onL
   onLocateAll: () => void
   onOpenSheet: (p: GradedPoint) => void
   onAdopt: (p: GradedPoint) => void
+  onAdjustScore: (p: GradedPoint, delta: number) => void
   onExport: () => void
   onAskFix: (label: string) => void
 }) {
-  if (reply.kind === 'grade') return <GradeReply reply={reply} visible={visible} activeAnchor={activeAnchor} adopted={adopted} onLocate={onLocate} onLocateAll={onLocateAll} onOpenSheet={onOpenSheet} onAdopt={onAdopt} onExport={onExport} />
-  if (reply.kind === 'point-detail') return <PointDetailReply point={reply.point} activeAnchor={activeAnchor} adopted={adopted} onLocate={onLocate} onOpenSheet={onOpenSheet} onAdopt={onAdopt} onAskFix={onAskFix} />
+  if (reply.kind === 'grade') return <GradeReply reply={reply} visible={visible} activeAnchor={activeAnchor} adopted={adopted} onLocate={onLocate} onLocateAll={onLocateAll} onOpenSheet={onOpenSheet} onAdopt={onAdopt} onAdjustScore={onAdjustScore} onExport={onExport} />
+  if (reply.kind === 'point-detail') return <PointDetailReply point={reply.point} activeAnchor={activeAnchor} adopted={adopted} onLocate={onLocate} onOpenSheet={onOpenSheet} onAdopt={onAdopt} onAdjustScore={onAdjustScore} onAskFix={onAskFix} />
   if (reply.kind === 'knowledge') return <KnowledgeReply items={reply.items} />
   if (reply.kind === 'table') return <TableReply caption={reply.caption} head={reply.head} rows={reply.rows} />
   if (reply.kind === 'comments') return <CommentsReply items={reply.items} />
@@ -1012,13 +1126,14 @@ function Overview({ points, onLocateAll }: { points: GradedPoint[]; onLocateAll:
   )
 }
 
-function PointCard({ p, activeAnchor, adopted, onLocate, onOpenSheet, onAdopt }: {
+function PointCard({ p, activeAnchor, adopted, onLocate, onOpenSheet, onAdopt, onAdjustScore }: {
   p: GradedPoint
   activeAnchor: string | null
   adopted: Set<string>
   onLocate: (p: GradedPoint) => void
   onOpenSheet: (p: GradedPoint) => void
   onAdopt: (p: GradedPoint) => void
+  onAdjustScore: (p: GradedPoint, delta: number) => void
 }) {
   const v = VERDICT_STYLE[p.verdict]
   const anchor = p.anchor ?? p.evidence[0]?.chunkId ?? null
@@ -1034,7 +1149,11 @@ function PointCard({ p, activeAnchor, adopted, onLocate, onOpenSheet, onAdopt }:
           <p className="mt-0.5 text-[10.5px] text-zinc-400">{GROUPS[p.pointId] ?? '评分项'} · {anchor ?? '无证据'}</p>
         </div>
         <div className="shrink-0 text-right">
-          <div className="text-[15px] font-semibold leading-none tabular-nums">{p.score}<span className="text-[11px] font-normal text-zinc-400">/{p.maxScore}</span></div>
+          <div className="flex items-center justify-end gap-1">
+            <button onClick={() => onAdjustScore(p, -1)} disabled={p.score <= 0} className="grid h-4 w-4 place-items-center rounded text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700 disabled:opacity-30">−</button>
+            <div className="text-[15px] font-semibold leading-none tabular-nums">{p.score}<span className="text-[11px] font-normal text-zinc-400">/{p.maxScore}</span></div>
+            <button onClick={() => onAdjustScore(p, 1)} disabled={p.score >= p.maxScore} className="grid h-4 w-4 place-items-center rounded text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700 disabled:opacity-30">+</button>
+          </div>
           <span className={`mt-1.5 inline-flex items-center gap-1 rounded-full border px-1.5 py-[1.5px] text-[10px] font-medium ${v.bg} ${v.text}`}>
             {p.verdict === 'full' ? <Check className="h-2.5 w-2.5" /> : p.verdict === 'partial' ? <Minus className="h-2.5 w-2.5" /> : <X className="h-2.5 w-2.5" />}
             {v.label}
@@ -1086,7 +1205,7 @@ function PointCard({ p, activeAnchor, adopted, onLocate, onOpenSheet, onAdopt }:
   )
 }
 
-function GradeReply({ reply, visible, activeAnchor, adopted, onLocate, onLocateAll, onOpenSheet, onAdopt, onExport }: {
+function GradeReply({ reply, visible, activeAnchor, adopted, onLocate, onLocateAll, onOpenSheet, onAdopt, onAdjustScore, onExport }: {
   reply: Extract<Reply, { kind: 'grade' }>
   visible: number
   activeAnchor: string | null
@@ -1095,15 +1214,32 @@ function GradeReply({ reply, visible, activeAnchor, adopted, onLocate, onLocateA
   onLocateAll: () => void
   onOpenSheet: (p: GradedPoint) => void
   onAdopt: (p: GradedPoint) => void
+  onAdjustScore: (p: GradedPoint, delta: number) => void
   onExport: () => void
 }) {
   const points = reply.points
   const done = visible >= points.length
   const weakCount = points.filter((p) => p.verdict !== 'full').length
   const current = visible < points.length ? points[visible] : null
+  const mode = reply.mode || ''
+  const isAgent = mode === 'agent' && !reply.fallback
+  const reasonText = ({ no_api_key: '未配置 API Key', timeout: 'AI 响应超时(10 秒)', error: 'AI 接口异常', bad_output: 'AI 输出无法解析' } as Record<string, string>)[reply.fallbackReason ?? ''] ?? '未知原因'
 
   return (
     <ReplyShell>
+      {mode && (
+        <div className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-[11px] font-medium ${isAgent ? 'border-emerald-200/70 bg-emerald-50/70 text-emerald-700' : reply.fallback ? 'border-amber-300/70 bg-amber-50/80 text-amber-800' : 'border-zinc-200/70 bg-zinc-50 text-zinc-500'}`}>
+          <Sparkles className="h-3.5 w-3.5 shrink-0" />
+          <span>
+            {isAgent
+              ? `混元 AI 实时评分${reply.model ? ` · ${reply.model}` : ''}`
+              : reply.fallback
+                ? `已回退本地规则评分：${reasonText}`
+                : '本地规则评分（演示数据）'}
+          </span>
+          <span className="ml-auto font-mono text-[10px] opacity-70">{mode}</span>
+        </div>
+      )}
       <p className="text-[12.5px] leading-relaxed text-zinc-700">
         已按评分细则开始逐项核查，共 <span className="font-medium text-zinc-900">{points.length}</span> 个评分点。
         点击「定位原文」在右侧<span className="text-amber-700">黄色高亮</span>；「定位扣分点」以<span className="text-rose-600">红色高亮</span>依次标出失分处。
@@ -1122,7 +1258,7 @@ function GradeReply({ reply, visible, activeAnchor, adopted, onLocate, onLocateA
       )}
       <div className="space-y-2.5">
         {points.slice(0, visible).map((p) => (
-          <PointCard key={p.pointId} p={p} activeAnchor={activeAnchor} adopted={adopted} onLocate={onLocate} onOpenSheet={onOpenSheet} onAdopt={onAdopt} />
+          <PointCard key={p.pointId} p={p} activeAnchor={activeAnchor} adopted={adopted} onLocate={onLocate} onOpenSheet={onOpenSheet} onAdopt={onAdopt} onAdjustScore={onAdjustScore} />
         ))}
       </div>
       {done && (
@@ -1157,13 +1293,14 @@ function GradeReply({ reply, visible, activeAnchor, adopted, onLocate, onLocateA
   )
 }
 
-function PointDetailReply({ point, activeAnchor, adopted, onLocate, onOpenSheet, onAdopt, onAskFix }: {
+function PointDetailReply({ point, activeAnchor, adopted, onLocate, onOpenSheet, onAdopt, onAdjustScore, onAskFix }: {
   point: GradedPoint
   activeAnchor: string | null
   adopted: Set<string>
   onLocate: (p: GradedPoint) => void
   onOpenSheet: (p: GradedPoint) => void
   onAdopt: (p: GradedPoint) => void
+  onAdjustScore: (p: GradedPoint, delta: number) => void
   onAskFix: (label: string) => void
 }) {
   const lost = point.maxScore - point.score
@@ -1201,7 +1338,7 @@ function PointDetailReply({ point, activeAnchor, adopted, onLocate, onOpenSheet,
           </ul>
         </div>
       )}
-      <PointCard p={point} activeAnchor={activeAnchor} adopted={adopted} onLocate={onLocate} onOpenSheet={onOpenSheet} onAdopt={onAdopt} />
+      <PointCard p={point} activeAnchor={activeAnchor} adopted={adopted} onLocate={onLocate} onOpenSheet={onOpenSheet} onAdopt={onAdopt} onAdjustScore={onAdjustScore} />
     </ReplyShell>
   )
 }

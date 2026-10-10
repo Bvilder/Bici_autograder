@@ -33,7 +33,7 @@ function renderBlocks(text: string, query: string): ReactNode[] {
   }
   const flushPara = () => {
     if (para.length) {
-      out.push(<p key={`p${out.length}`} className="mt-2"><Highlight text={para.join(' ')} query={query} /></p>)
+      out.push(<p key={`p${out.length}`} className="mt-2 text-zinc-800"><Highlight text={para.join(' ')} query={query} /></p>)
       para = []
     }
   }
